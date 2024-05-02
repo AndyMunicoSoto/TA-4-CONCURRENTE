@@ -1,118 +1,79 @@
-#define SIZE_MIN 70
-#define SIZE_MAX 180
-#define PRICE_MIN 90000
-#define PRICE_MAX 150000
-#define ROOMS_MIN 3
-#define ROOMS_MAX 7
-#define AGE_MIN 1
-#define AGE_MAX 15
+mtype { COMPUTE, FINISH };
+
+#define TESTS 5
+#define DATA_SIZE 10
+chan result_channel = [2];
 
 typedef DataPoint {
-    float size;
-    int rooms;
-    int age;
-    float price;
-    float predicted;
-    float residual;
+    int Size;
+    int Price;
 }
 
-mtype { LinearRegression, Prediction }
+DataPoint data[DATA_SIZE]; // Arreglo para almacenar los datos
 
-chan data_chan = [1] of { DataPoint }
-chan result_chan = [1] of { float, float }
-chan predict_chan = [1] of { float, float, float }
+proctype linear_regression() {
 
-proctype GenerateData(int seed, int size) {
+    int sumX = 0, sumY = 0, sumXY = 0, sumXSquare = 0, slope = 0, intercept = 0;
+
     int i;
-    DataPoint dp;
-    srand(seed);
-    for (i : 1..size) {
-        dp.size = SIZE_MIN + (float)(SIZE_MAX - SIZE_MIN) * rand() / RAND_MAX;
-        dp.rooms = ROOMS_MIN + rand() % (ROOMS_MAX - ROOMS_MIN + 1);
-        dp.age = AGE_MIN + rand() % (AGE_MAX - AGE_MIN + 1);
-        dp.price = PRICE_MIN + (float)(PRICE_MAX - PRICE_MIN) * rand() / RAND_MAX;
-        data_chan!dp;
-    }
-}
+    
+    // Cálculo de la regresión lineal
 
-proctype LinearRegression() {
-    DataPoint dp;
-    float sumX = 0, sumY = 0, sumXY = 0, sumXSquare = 0;
-    float slope, intercept;
-    int n = 0;
-
+    i = 0;
     do
-    :: data_chan?dp -> {
-        sumX += dp.size;
-        sumY += dp.price;
-        sumXY += dp.size * dp.price;
-        sumXSquare += dp.size * dp.size;
-        n++;
-    }
+    :: i < DATA_SIZE ->
+        sumX = sumX + data[i].Size;
+        sumY = sumY + data[i].Price;
+        sumXY = sumXY + data[i].Size * data[i].Price;
+        sumXSquare = sumXSquare + data[i].Size * data[i].Size;
+        i = i + 1;
+    :: else ->
+        break; // Salir del bucle cuando i >= DATA_SIZE
     od;
 
-    if
-    :: (n > 0) -> {
-        slope = ((float)n * sumXY - sumX * sumY) / ((float)n * sumXSquare - sumX * sumX);
-        intercept = (sumY - slope * sumX) / (float)n;
-        result_chan!(slope, intercept);
-    }
-    :: else -> skip;
-    fi;
+    int n = DATA_SIZE;
+    slope = (n * sumXY - sumX * sumY) / (n * sumXSquare - sumX * sumX) ;
+    intercept = (sumY - slope * sumX) / n;
+    
+    // Enviar los resultados a través del canal
+    result_channel!slope;
+    result_channel!intercept;
 }
 
-proctype PredictPrice(float size, float slope, float intercept) {
-    float predicted;
-    predicted = slope * size + intercept;
-    predict_chan!(size, predicted, (float)0);
+proctype handle_results() {
+    int slope, intercept;
+    
+    // Recibir los resultados de los procesos de regresión lineal
+    do
+    :: result_channel??slope; result_channel??intercept -> 
+       // Almacenar los resultados
+       results[_pid * 2] = slope;
+       results[_pid * 2 + 1] = intercept;
+    od
+    
+    // Indicar que todos los procesos han terminado
+    all_finished = 1;
 }
 
 init {
-    int tests = 1000;
-    int dataSize = 1000000;
-    int trimPct = 5;
-    int seed = time(NULL);
     int i;
-    float slope, intercept, size, predictedPrice;
-    float totalPredictedPrice = 0, totalSize = 0;
-    float predictedPrices[tests];
 
-    run GenerateData(seed, dataSize);
-    run LinearRegression();
+    all_finished = 0;
+    // Inicializar los datos y ejecutar los procesos de regresión lineal
+    i = 0;
 
-    for (i : 1..tests) {
-        result_chan?slope;
-        result_chan?intercept;
-        size = SIZE_MIN + (float)(SIZE_MAX - SIZE_MIN) * rand() / RAND_MAX;
-        run PredictPrice(size, slope, intercept);
-    }
+    do
+    :: i < TESTS ->
+        run linear_regression();
+        i = i + 1;
+    :: else ->
+        break; // Salir del bucle cuando i >= TESTS
+    od;
 
-    for (i : 1..tests) {
-        predict_chan?size;
-        predict_chan?predictedPrice;
-        predictedPrices[i-1] = predictedPrice;
-        totalPredictedPrice += predictedPrice;
-        totalSize += size;
-    }
-
-    qsort(predictedPrices, tests, sizeof(predictedPrices[0]), floatcmp);
-    int trimIndex = tests * trimPct / 100;
-    float trimmedPrices[tests - 2 * trimIndex];
-
-    for (i : trimIndex+1..tests-trimIndex) {
-        trimmedPrices[i-trimIndex-1] = predictedPrices[i-1];
-    }
-
-    float trimmedMean = 0;
-    for (i : 0..(tests - 2 * trimIndex) - 1) {
-        trimmedMean += trimmedPrices[i];
-    }
-    trimmedMean = trimmedMean / (tests - 2 * trimIndex);
-
-    float averagePredictedPrice = totalPredictedPrice / tests;
-    float averageSize = totalSize / tests;
-
-    printf("Tamaño promedio predicho: %.2f metros cuadrados\n", averageSize);
-    printf("Precio promedio predicho: %.2f\n", averagePredictedPrice);
-    printf("Media recortada del precio (media recortada al %d%%): %.2f\n", trimPct, trimmedMean);
+    // Ejecutar el proceso para manejar los resultados
+    run handle_results();
+    // Esperar a que todos los procesos terminen
+    do
+    :: all_finished == 1 -> break;
+    od
 }
