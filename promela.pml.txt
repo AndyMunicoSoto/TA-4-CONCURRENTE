@@ -1,0 +1,118 @@
+#define SIZE_MIN 70
+#define SIZE_MAX 180
+#define PRICE_MIN 90000
+#define PRICE_MAX 150000
+#define ROOMS_MIN 3
+#define ROOMS_MAX 7
+#define AGE_MIN 1
+#define AGE_MAX 15
+
+typedef DataPoint {
+    float size;
+    int rooms;
+    int age;
+    float price;
+    float predicted;
+    float residual;
+}
+
+mtype { LinearRegression, Prediction }
+
+chan data_chan = [1] of { DataPoint }
+chan result_chan = [1] of { float, float }
+chan predict_chan = [1] of { float, float, float }
+
+proctype GenerateData(int seed, int size) {
+    int i;
+    DataPoint dp;
+    srand(seed);
+    for (i : 1..size) {
+        dp.size = SIZE_MIN + (float)(SIZE_MAX - SIZE_MIN) * rand() / RAND_MAX;
+        dp.rooms = ROOMS_MIN + rand() % (ROOMS_MAX - ROOMS_MIN + 1);
+        dp.age = AGE_MIN + rand() % (AGE_MAX - AGE_MIN + 1);
+        dp.price = PRICE_MIN + (float)(PRICE_MAX - PRICE_MIN) * rand() / RAND_MAX;
+        data_chan!dp;
+    }
+}
+
+proctype LinearRegression() {
+    DataPoint dp;
+    float sumX = 0, sumY = 0, sumXY = 0, sumXSquare = 0;
+    float slope, intercept;
+    int n = 0;
+
+    do
+    :: data_chan?dp -> {
+        sumX += dp.size;
+        sumY += dp.price;
+        sumXY += dp.size * dp.price;
+        sumXSquare += dp.size * dp.size;
+        n++;
+    }
+    od;
+
+    if
+    :: (n > 0) -> {
+        slope = ((float)n * sumXY - sumX * sumY) / ((float)n * sumXSquare - sumX * sumX);
+        intercept = (sumY - slope * sumX) / (float)n;
+        result_chan!(slope, intercept);
+    }
+    :: else -> skip;
+    fi;
+}
+
+proctype PredictPrice(float size, float slope, float intercept) {
+    float predicted;
+    predicted = slope * size + intercept;
+    predict_chan!(size, predicted, (float)0);
+}
+
+init {
+    int tests = 1000;
+    int dataSize = 1000000;
+    int trimPct = 5;
+    int seed = time(NULL);
+    int i;
+    float slope, intercept, size, predictedPrice;
+    float totalPredictedPrice = 0, totalSize = 0;
+    float predictedPrices[tests];
+
+    run GenerateData(seed, dataSize);
+    run LinearRegression();
+
+    for (i : 1..tests) {
+        result_chan?slope;
+        result_chan?intercept;
+        size = SIZE_MIN + (float)(SIZE_MAX - SIZE_MIN) * rand() / RAND_MAX;
+        run PredictPrice(size, slope, intercept);
+    }
+
+    for (i : 1..tests) {
+        predict_chan?size;
+        predict_chan?predictedPrice;
+        predictedPrices[i-1] = predictedPrice;
+        totalPredictedPrice += predictedPrice;
+        totalSize += size;
+    }
+
+    qsort(predictedPrices, tests, sizeof(predictedPrices[0]), floatcmp);
+    int trimIndex = tests * trimPct / 100;
+    float trimmedPrices[tests - 2 * trimIndex];
+
+    for (i : trimIndex+1..tests-trimIndex) {
+        trimmedPrices[i-trimIndex-1] = predictedPrices[i-1];
+    }
+
+    float trimmedMean = 0;
+    for (i : 0..(tests - 2 * trimIndex) - 1) {
+        trimmedMean += trimmedPrices[i];
+    }
+    trimmedMean = trimmedMean / (tests - 2 * trimIndex);
+
+    float averagePredictedPrice = totalPredictedPrice / tests;
+    float averageSize = totalSize / tests;
+
+    printf("Tamaño promedio predicho: %.2f metros cuadrados\n", averageSize);
+    printf("Precio promedio predicho: %.2f\n", averagePredictedPrice);
+    printf("Media recortada del precio (media recortada al %d%%): %.2f\n", trimPct, trimmedMean);
+}
