@@ -27,7 +27,7 @@ type PredictionResponse struct {
 
 func main() {
 
-	url := "https://raw.githubusercontent.com/parzzd/ta4/main/house_price_8.csv?token=GHSAT0AAAAAACTRFWPRZ4BPMJ6ASHCND45WZTLQDSA"
+	url := "https://raw.githubusercontent.com/AndyMunicoSoto/TP-CONCURRENTE/main/house_prices.csv"
 
 	resp, err := http.Get(url)
 	if err != nil {
